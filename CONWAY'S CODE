@@ -1,0 +1,370 @@
+```react
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { Play, Pause, Trash2, Zap, Grid, Info, Activity, MousePointer2 } from 'lucide-react';
+
+// Configuration
+const numRows = 40;
+const numCols = 60; // Wider aspect ratio for better viewing
+
+const operations = [
+  [0, 1], [0, -1], [1, -1], [1, 1],
+  [1, 0], [-1, 0], [-1, 1], [-1, -1],
+];
+
+const generateEmptyGrid = () => {
+  return Array.from({ length: numRows }, () => Array(numCols).fill(0));
+};
+
+const presets = {
+  random: (grid) => {
+    for (let i = 0; i < numRows; i++) {
+      for (let j = 0; j < numCols; j++) {
+        // Lower density (0.2) looks better and stabilizes faster
+        grid[i][j] = Math.random() > 0.8 ? 1 : 0;
+      }
+    }
+  },
+  glider: (grid) => {
+    // Standard Glider
+    const offset = 2;
+    grid[0 + offset][1 + offset] = 1;
+    grid[1 + offset][2 + offset] = 1;
+    grid[2 + offset][0 + offset] = 1;
+    grid[2 + offset][1 + offset] = 1;
+    grid[2 + offset][2 + offset] = 1;
+  },
+  pulsar: (grid) => {
+    // A period-3 oscillator
+    const cx = Math.floor(numCols / 2);
+    const cy = Math.floor(numRows / 2);
+    
+    // Safely apply patterns
+    if (cy - 1 >= 0 && cy + 1 < numRows && cx - 6 >= 0 && cx + 6 < numCols) {
+       for(let i=0; i<3; i++) {
+         grid[cy-1][cx-2-i] = 1; grid[cy+1][cx-2-i] = 1; // Left bars
+         grid[cy-1][cx+2+i] = 1; grid[cy+1][cx+2+i] = 1; // Right bars
+         
+         grid[cy-2-i][cx-1] = 1; grid[cy-2-i][cx+1] = 1; // Top bars
+         grid[cy+2+i][cx-1] = 1; grid[cy+2+i][cx+1] = 1; // Bottom bars
+       }
+    }
+  },
+  gosperGun: (grid) => {
+    // The famous Gosper Glider Gun - creates gliders indefinitely
+    const oy = 5;
+    const ox = 5;
+
+    const coords = [
+      [5, 1], [5, 2], [6, 1], [6, 2],
+      [5, 11], [6, 11], [7, 11], [4, 12], [8, 12], [3, 13], [9, 13], [3, 14], [9, 14], [6, 15], [4, 16], [8, 16], [5, 17], [6, 17], [7, 17], [6, 18],
+      [3, 21], [4, 21], [5, 21], [3, 22], [4, 22], [5, 22], [2, 23], [6, 23], [1, 25], [2, 25], [6, 25], [7, 25],
+      [3, 35], [4, 35], [3, 36], [4, 36]
+    ];
+
+    coords.forEach(([y, x]) => {
+      if (oy + y < numRows && ox + x < numCols) {
+        grid[oy + y][ox + x] = 1;
+      }
+    });
+  },
+  lwss: (grid) => {
+    // Lightweight Spaceship - travels across the grid
+    const cy = Math.floor(numRows / 2);
+    const cx = 5;
+    
+    const coords = [
+      [0, 1], [0, 4], 
+      [1, 0], 
+      [2, 0], [2, 4], 
+      [3, 0], [3, 1], [3, 2], [3, 3]
+    ];
+    
+    coords.forEach(([y, x]) => {
+      if (cy + y < numRows && cx + x < numCols) grid[cy + y][cx + x] = 1;
+    });
+  },
+  diehard: (grid) => {
+    // Dies after 130 generations
+    const cy = Math.floor(numRows / 2);
+    const cx = Math.floor(numCols / 2);
+    
+    const coords = [
+       [0, 6], 
+       [1, 0], [1, 1], 
+       [2, 1], [2, 5], [2, 6], [2, 7]
+    ];
+
+    coords.forEach(([y, x]) => {
+      if (cy + y < numRows && cx + x < numCols) grid[cy + y][cx + x] = 1;
+    });
+  },
+  acorn: (grid) => {
+    // Methuselah: Explodes for 5000+ generations
+    const cy = Math.floor(numRows / 2);
+    const cx = Math.floor(numCols / 2);
+
+    const coords = [
+      [0, 1], 
+      [1, 3],
+      [2, 0], [2, 1], [2, 4], [2, 5], [2, 6]
+    ];
+
+    coords.forEach(([y, x]) => {
+      if (cy + y < numRows && cx + x < numCols) grid[cy + y][cx + x] = 1;
+    });
+  }
+};
+
+export default function App() {
+  const [grid, setGrid] = useState(generateEmptyGrid);
+  const [running, setRunning] = useState(false);
+  const [speed, setSpeed] = useState(50); // Lower is faster ms delay
+  const [generation, setGeneration] = useState(0);
+  const [showInfo, setShowInfo] = useState(false);
+
+  // Refs for accessing latest state inside the interval without re-triggering it
+  const speedRef = useRef(speed);
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+
+  const runSimulationStep = useCallback(() => {
+    setGrid((g) => {
+      return g.map((row, i) => 
+        row.map((cell, j) => {
+          let neighbors = 0;
+          operations.forEach(([x, y]) => {
+            const newI = i + x;
+            const newJ = j + y;
+            if (newI >= 0 && newI < numRows && newJ >= 0 && newJ < numCols) {
+              if (g[newI][newJ] > 0) neighbors++;
+            }
+          });
+
+          // Rules of Life with Aging
+          if (cell > 0) {
+            if (neighbors === 2 || neighbors === 3) {
+              return Math.min(cell + 1, 10); 
+            }
+            return 0; 
+          } else {
+            if (neighbors === 3) return 1;
+            return 0;
+          }
+        })
+      );
+    });
+    setGeneration((gen) => gen + 1);
+  }, []);
+
+  useEffect(() => {
+    let timeoutId;
+    if (running) {
+      const loop = () => {
+        runSimulationStep();
+        timeoutId = setTimeout(loop, speedRef.current);
+      };
+      loop();
+    }
+    return () => clearTimeout(timeoutId);
+  }, [running, runSimulationStep]); 
+
+  const applyPreset = (type) => {
+    setRunning(false);
+    const newGrid = generateEmptyGrid();
+    presets[type](newGrid);
+    setGrid(newGrid);
+    setGeneration(0);
+  };
+
+  const clearGrid = () => {
+    setRunning(false);
+    setGrid(generateEmptyGrid());
+    setGeneration(0);
+  };
+
+  const getCellClass = (val) => {
+    if (val === 0) return 'bg-slate-900';
+    if (val === 1) return 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.9)] scale-110'; 
+    if (val === 2) return 'bg-indigo-300';
+    if (val < 5) return 'bg-indigo-500';
+    if (val < 10) return 'bg-violet-600';
+    return 'bg-fuchsia-900 border-fuchsia-800'; 
+  };
+
+  return (
+    <div className="flex flex-col items-center min-h-screen bg-slate-950 text-slate-100 p-4 font-sans selection:bg-indigo-500/30">
+      
+      {/* Header */}
+      <div className="w-full max-w-5xl mb-6 flex items-end justify-between border-b border-slate-800 pb-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400 flex items-center gap-3">
+            <Grid className="w-8 h-8 text-indigo-500" /> Conway's Game of Life
+          </h1>
+          <p className="text-slate-500 mt-1 text-sm font-mono flex items-center gap-4">
+            <span>GEN: <span className="text-indigo-300">{generation}</span></span>
+            <span className="flex items-center gap-1"><Activity className="w-3 h-3"/> {running ? 'ACTIVE' : 'PAUSED'}</span>
+          </p>
+        </div>
+        <button 
+          onClick={() => setShowInfo(!showInfo)}
+          className={`p-2 rounded-full transition-all ${showInfo ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
+        >
+          <Info className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Info Panel */}
+      {showInfo && (
+        <div className="w-full max-w-5xl bg-slate-900/50 backdrop-blur border border-indigo-500/20 p-4 rounded-xl mb-6 text-sm grid md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div>
+            <h3 className="text-indigo-400 font-bold mb-2 flex items-center gap-2"><MousePointer2 className="w-4 h-4"/> Interaction</h3>
+            <p className="text-slate-400">Click or tap cells to toggle state. Drawing works best when paused. Use presets to load classic patterns.</p>
+          </div>
+          <div>
+            <h3 className="text-emerald-400 font-bold mb-2">The Rules</h3>
+            <ul className="text-slate-400 space-y-1 list-disc pl-4">
+              <li><span className="text-slate-200">Birth:</span> Dead cell with 3 neighbors becomes alive.</li>
+              <li><span className="text-slate-200">Survival:</span> Live cell with 2 or 3 neighbors survives.</li>
+              <li><span className="text-red-400">Death:</span> Overpopulation ({'>'}3) or Isolation ({'<'}2).</li>
+            </ul>
+          </div>
+          <div>
+            <h3 className="text-fuchsia-400 font-bold mb-2">Heatmap</h3>
+            <div className="flex items-center gap-2 h-full text-xs text-slate-500">
+               <span>New</span>
+               <div className="h-2 w-16 rounded-full bg-gradient-to-r from-white via-indigo-500 to-fuchsia-900"></div>
+               <span>Old</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Grid Canvas */}
+      <div className="relative group max-w-full overflow-auto rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
+        <div 
+          className="grid gap-[1px] bg-slate-800/50 p-[1px] touch-none"
+          style={{ gridTemplateColumns: `repeat(${numCols}, minmax(10px, 1fr))` }}
+        >
+          {grid.map((row, i) => (
+            row.map((val, j) => (
+              <div
+                key={`${i}-${j}`}
+                onClick={() => {
+                  const newGrid = grid.map(r => [...r]);
+                  newGrid[i][j] = grid[i][j] ? 0 : 1;
+                  setGrid(newGrid);
+                }}
+                className={`
+                  aspect-square w-3 sm:w-4 md:w-5 
+                  transition-colors duration-300 ease-in-out cursor-pointer
+                  ${getCellClass(val)}
+                  hover:opacity-80
+                `}
+              />
+            ))
+          ))}
+        </div>
+        
+        {/* Overlay when paused and empty */}
+        {!running && generation === 0 && grid.every(r => r.every(c => c === 0)) && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="bg-black/50 text-white px-4 py-2 rounded-lg backdrop-blur text-sm font-mono border border-white/10">
+              Tap grid to seed life
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Control Deck */}
+      <div className="w-full max-w-5xl mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        
+        {/* Main Controls */}
+        <div className="bg-slate-900 p-2 rounded-xl border border-slate-800 flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setRunning(!running)}
+              className={`
+                flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-sm transition-all
+                ${running 
+                  ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20' 
+                  : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20'}
+              `}
+            >
+              {running ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+              {running ? 'HALT' : 'EVOLVE'}
+            </button>
+
+            <button
+              onClick={clearGrid}
+              className="p-3 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors border border-transparent hover:border-slate-700"
+              title="Extinction Event"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="flex flex-col items-end px-4 gap-1 w-1/3">
+             <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Simulation Rate</span>
+             <input
+              type="range"
+              min="10"
+              max="500"
+              step="10"
+              value={510 - speed}
+              onChange={(e) => setSpeed(510 - Number(e.target.value))}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400"
+            />
+          </div>
+        </div>
+
+        {/* Preset Loader */}
+        <div className="bg-slate-900 p-2 rounded-xl border border-slate-800 flex items-center gap-2 overflow-x-auto no-scrollbar shadow-lg px-4">
+          <span className="text-xs font-bold text-slate-500 uppercase mr-2 shrink-0">Inject<br/>DNA:</span>
+          
+          <button onClick={() => applyPreset('random')} className="preset-btn bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
+            <Zap className="w-3 h-3" /> Random
+          </button>
+          <button onClick={() => applyPreset('glider')} className="preset-btn bg-slate-800 text-slate-300 border-slate-700">
+            Glider
+          </button>
+          <button onClick={() => applyPreset('lwss')} className="preset-btn bg-slate-800 text-slate-300 border-slate-700">
+            LWSS
+          </button>
+          <button onClick={() => applyPreset('pulsar')} className="preset-btn bg-slate-800 text-slate-300 border-slate-700">
+            Pulsar
+          </button>
+          <button onClick={() => applyPreset('diehard')} className="preset-btn bg-rose-900/20 text-rose-400 border-rose-900/30">
+            Diehard
+          </button>
+          <button onClick={() => applyPreset('acorn')} className="preset-btn bg-purple-900/20 text-purple-400 border-purple-900/30">
+            Acorn
+          </button>
+          <button onClick={() => applyPreset('gosperGun')} className="preset-btn bg-amber-500/10 text-amber-400 border-amber-500/20">
+            Gun
+          </button>
+        </div>
+      </div>
+
+      <style>{`
+        .preset-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 16px;
+          border-radius: 8px;
+          font-size: 0.75rem;
+          font-weight: 600;
+          white-space: nowrap;
+          transition: all 0.2s;
+          border-width: 1px;
+        }
+        .preset-btn:hover {
+          background-color: rgba(255,255,255,0.05);
+          transform: translateY(-1px);
+        }
+      `}</style>
+    </div>
+  );
+}
+
+
+```
